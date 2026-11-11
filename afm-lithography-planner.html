@@ -1,0 +1,721 @@
+<title>Graphite Cut Planner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: wide drawing stage on the left, a numbered workflow panel (scan, draw, pattern, export) on the right.
+   Stack to one column on narrow screens. Stage is always dark so grayscale AFM contrast reads the same in both themes. */
+:root {
+  --bg: #f3f5f6;
+  --panel: #ffffff;
+  --line: #d5dbde;
+  --fg: #1b2428;
+  --muted: #5d6b72;
+  --accent: #0b6f8e;
+  --accent-fg: #ffffff;
+  --clear: #d8432b;
+  --keep: #1f8a54;
+  --path: #e0a400;
+  --stage: #1a2023;
+  --stage-fg: #cfd8dc;
+  --danger-bg: #fde8e4;
+  --danger-fg: #8a1f0e;
+  --note-bg: #e6f3f7;
+  --note-fg: #0a4d63;
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181b; --panel: #1b2327; --line: #30393e; --fg: #e5ecef; --muted: #8fa0a8;
+    --accent: #5cc1de; --accent-fg: #06222c; --clear: #ff7a63; --keep: #5fd08f; --path: #ffc83a;
+    --stage: #0c1012; --stage-fg: #b6c4ca; --danger-bg: #3a1a15; --danger-fg: #ffb4a6;
+    --note-bg: #12303a; --note-fg: #a9e0f0; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181b; --panel: #1b2327; --line: #30393e; --fg: #e5ecef; --muted: #8fa0a8;
+  --accent: #5cc1de; --accent-fg: #06222c; --clear: #ff7a63; --keep: #5fd08f; --path: #ffc83a;
+  --stage: #0c1012; --stage-fg: #b6c4ca; --danger-bg: #3a1a15; --danger-fg: #ffb4a6;
+  --note-bg: #12303a; --note-fg: #a9e0f0; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 14px 28px;
+}
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 15px; margin: 0 0 10px; display: flex; gap: 8px; align-items: baseline; }
+h2 .n { font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-weight: 500; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin-bottom: 12px; }
+header p { margin: 0; color: var(--muted); min-width: 0; }
+.app { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .app { grid-template-columns: minmax(0, 1fr); } }
+.stagewrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; position: sticky; top: 8px; }
+@media (max-width: 900px) { .stagewrap { position: static; } }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--panel); }
+.seg button { border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--fg); padding: 6px 10px; font: inherit; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.seg button.clear[aria-pressed="true"] { background: var(--clear); color: #fff; }
+.seg button.keep[aria-pressed="true"] { background: var(--keep); color: #fff; }
+.seg kbd { font-family: var(--font-mono); font-size: 10px; opacity: .7; margin-left: 5px; }
+.stage { position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; height: min(68vh, 720px); min-height: 340px; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.hud { position: absolute; left: 10px; bottom: 8px; right: 10px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 11px; color: var(--stage-fg); pointer-events: none; }
+.hint { color: var(--muted); font-size: 12px; min-height: 18px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+section { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+section + section { border-top: 1px solid var(--line); padding-top: 14px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.row > label { color: var(--muted); font-size: 12px; min-width: 92px; }
+.row.tight > label { min-width: 0; }
+input[type=number], select, input[type=text] {
+  font: inherit; font-family: var(--font-mono); font-size: 13px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; width: 84px; min-width: 0;
+}
+select { width: auto; font-family: var(--font-body); }
+input[type=range] { flex: 1; min-width: 90px; accent-color: var(--accent); }
+.btn { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filebtn { position: relative; overflow: hidden; }
+.filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.banner { border-radius: 6px; padding: 8px 10px; font-size: 12.5px; }
+.banner.err { background: var(--danger-bg); color: var(--danger-fg); }
+.banner.note { background: var(--note-bg); color: var(--note-fg); }
+.shapes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 190px; overflow-y: auto; }
+.shapes li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; cursor: pointer; }
+.shapes li[aria-selected="true"] { border-color: var(--accent); background: var(--note-bg); }
+.chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.chip.clear { background: var(--clear); } .chip.keep { background: var(--keep); }
+.shapes .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shapes .ar { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.empty { color: var(--muted); font-size: 12.5px; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; font-size: 12.5px; }
+.stats div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dotted var(--line); padding-bottom: 2px; }
+.stats b { font-family: var(--font-mono); font-weight: 500; }
+.exports { display: flex; flex-wrap: wrap; gap: 8px; }
+.small-note { font-size: 12px; color: var(--muted); margin: 0; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 30; max-width: 90vw; }
+.themebtn { margin-left: auto; }
+@media (prefers-reduced-motion: no-preference) { .btn, .seg button { transition: background-color .12s, border-color .12s; } }
+</style>
+
+<header>
+  <h1>Graphite Cut Planner</h1>
+  <p>Load an AFM scan, rotate the flake level, mark areas to clear and areas to keep, then export one GDS file for the lithography module.</p>
+  <button class="btn small themebtn" id="themeBtn" type="button">Theme</button>
+</header>
+
+<div class="app">
+  <div class="stagewrap">
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Area type">
+        <button class="clear" id="modeClear" type="button" aria-pressed="true">Clear</button>
+        <button class="keep" id="modeKeep" type="button" aria-pressed="false">Keep</button>
+      </div>
+      <div class="seg" role="group" aria-label="Tool">
+        <button id="toolPoly" type="button" aria-pressed="true">Polygon<kbd>P</kbd></button>
+        <button id="toolRect" type="button" aria-pressed="false">Rectangle<kbd>R</kbd></button>
+        <button id="toolEdit" type="button" aria-pressed="false">Edit<kbd>V</kbd></button>
+        <button id="toolEdge" type="button" aria-pressed="false">Level on edge<kbd>E</kbd></button>
+      </div>
+      <button class="btn small" id="undoBtn" type="button">Undo</button>
+      <button class="btn small" id="redoBtn" type="button">Redo</button>
+      <button class="btn small" id="fitBtn" type="button">Fit view</button>
+    </div>
+    <div class="stage" id="stage">
+      <canvas id="cv" aria-label="AFM scan drawing area"></canvas>
+      <div class="hud"><span id="coord">x, y: 0.00, 0.00 µm</span><span id="scalelabel"></span></div>
+    </div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <div class="panel">
+    <section>
+      <h2><span class="n">1</span>Scan</h2>
+      <div id="banner"></div>
+      <div class="row">
+        <span class="btn filebtn primary">Open scan<input id="fileIn" type="file" accept=".txt"></span>
+        <button class="btn" id="exampleBtn" type="button">Example scan</button>
+      </div>
+      <p class="small-note">In Gwyddion, choose File, Save as, and pick the ASCII matrix (.txt) format. The file holds the real heights and the scan size.</p>
+      <div class="row"><label for="sizeW">Scan size</label>
+        <input id="sizeW" type="number" min="0.1" step="0.1" value="40"> <span>×</span>
+        <input id="sizeH" type="number" min="0.1" step="0.1" value="40"> <span>µm</span></div>
+      <div class="row"><label>Image</label>
+        <label class="row tight"><input id="levelPlane" type="checkbox" checked> Level plane</label>
+        <label class="row tight"><input id="alignRows" type="checkbox"> Align rows</label>
+        <label class="row tight"><input id="flipV" type="checkbox"> Flip vertical</label></div>
+      <div class="row"><label for="cLo">Contrast</label>
+        <input id="cLo" type="range" min="0" max="49" step="1" value="2" aria-label="Black point percentile">
+        <input id="cHi" type="range" min="51" max="100" step="1" value="98" aria-label="White point percentile"></div>
+      <div class="row"><label for="rot">Rotation</label>
+        <input id="rot" type="range" min="-180" max="180" step="0.1" value="0">
+        <input id="rotNum" type="number" min="-180" max="180" step="0.1" value="0" aria-label="Rotation in degrees"> <span>°</span></div>
+      <div class="row"><label></label>
+        <button class="btn small" id="rotM90" type="button">−90°</button>
+        <button class="btn small" id="rotM01" type="button">−0.1°</button>
+        <button class="btn small" id="rotP01" type="button">+0.1°</button>
+        <button class="btn small" id="rotP90" type="button">+90°</button></div>
+      <div class="row"><label for="edgeTarget">Level edge to</label>
+        <select id="edgeTarget"><option value="v" selected>Vertical</option><option value="h">Horizontal</option></select></div>
+      <p class="small-note">Rotation turns the image and any shapes you already drew together. Cutting lines are always horizontal on screen.</p>
+    </section>
+
+    <section>
+      <h2><span class="n">2</span>Shapes</h2>
+      <div class="row"><label for="snap">Snap to</label>
+        <select id="snap"><option value="0">Off</option><option value="0.05">0.05 µm</option><option value="0.1" selected>0.1 µm</option><option value="0.5">0.5 µm</option><option value="1">1 µm</option></select></div>
+      <ul class="shapes" id="shapeList" aria-label="Shapes"></ul>
+      <div class="row">
+        <button class="btn small" id="toggleSel" type="button">Switch clear / keep</button>
+        <button class="btn small" id="delSel" type="button">Delete</button>
+        <button class="btn small" id="clearAll" type="button">Delete all</button></div>
+      <p class="small-note">Hold Shift while drawing a polygon for right angles, or a rectangle for a square. Enter or a click on the first point closes a polygon. Esc cancels.</p>
+    </section>
+
+    <section>
+      <h2><span class="n">3</span>Pattern</h2>
+      <div class="row"><label for="spacing">Line spacing</label><input id="spacing" type="number" min="0.005" step="0.01" value="0.1"> <span>µm</span></div>
+      <div class="row"><label for="speed">Tip speed</label><input id="speed" type="number" min="0.1" step="0.5" value="10"> <span>µm/s</span></div>
+      <div class="row"><label class="row tight"><input id="showPath" type="checkbox" checked> Show toolpath on image</label></div>
+      <div class="stats" id="stats"></div>
+      <div id="warn"></div>
+    </section>
+
+    <section>
+      <h2><span class="n">4</span>Export</h2>
+      <div class="row"><label for="layer">GDS layer</label><input id="layer" type="number" min="0" max="255" step="1" value="2">
+        <label for="dtype" class="row tight">datatype</label><input id="dtype" type="number" min="0" max="255" step="1" value="0"></div>
+      <div class="row"><label for="origin">Origin</label>
+        <select id="origin"><option value="center">Scan center</option><option value="corner">Pattern lower left</option></select></div>
+      <div class="exports">
+        <button class="btn primary" id="expGds" type="button">Download .gds</button>
+        <button class="btn" id="expSvg" type="button">SVG preview</button>
+        <button class="btn" id="saveJson" type="button">Save shapes</button>
+        <span class="btn filebtn">Load shapes<input id="loadJson" type="file" accept=".json,application/json"></span>
+      </div>
+      <p class="small-note" id="expNote">The file has the outline of the final area plus every cutting line, all on one layer, in 1 nm units like your square.gds. Lines are written in a snake order, bottom row first.</p>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/polygon-clipping@0.15.7/dist/polygon-clipping.umd.min.js"></script>
+<script>
+/* PURE-START */
+function polyArea(p){let a=0;for(let i=0;i<p.length;i++){const q=p[(i+1)%p.length];a+=p[i][0]*q[1]-q[0]*p[i][1];}return Math.abs(a)/2;}
+function rotatePts(pts,deg){const t=deg*Math.PI/180,c=Math.cos(t),s=Math.sin(t);return pts.map(([x,y])=>[x*c-y*s,x*s+y*c]);}
+function crossings(poly,y){
+  const xs=[];
+  for(let i=0;i<poly.length;i++){
+    const a=poly[i],b=poly[(i+1)%poly.length];
+    if((a[1]<=y&&b[1]>y)||(b[1]<=y&&a[1]>y)) xs.push(a[0]+(y-a[1])*(b[0]-a[0])/(b[1]-a[1]));
+  }
+  xs.sort((p,q)=>p-q);
+  const out=[];for(let i=0;i+1<xs.length;i+=2)out.push([xs[i],xs[i+1]]);
+  return out;
+}
+function mergeIv(iv){
+  iv=iv.slice().sort((a,b)=>a[0]-b[0]);const out=[];
+  for(const v of iv){const l=out[out.length-1];if(l&&v[0]<=l[1])l[1]=Math.max(l[1],v[1]);else out.push([v[0],v[1]]);}
+  return out;
+}
+function subtractIv(a,b){
+  const out=[];
+  for(const [s,e] of a){
+    let cur=s;
+    for(const [bs,be] of b){
+      if(be<=cur||bs>=e)continue;
+      if(bs>cur)out.push([cur,bs]);
+      cur=Math.max(cur,be);
+      if(cur>=e)break;
+    }
+    if(cur<e)out.push([cur,e]);
+  }
+  return out;
+}
+/* Horizontal fill lines inside (union of clear) minus (union of keep). Lines sit half a spacing inside the lowest edge. */
+function buildFill(clear,keep,spacing,minLen=0.01){
+  if(!clear.length||!(spacing>0))return [];
+  let ymin=Infinity,ymax=-Infinity;
+  for(const p of clear)for(const v of p){ymin=Math.min(ymin,v[1]);ymax=Math.max(ymax,v[1]);}
+  const rows=[];
+  const n=Math.floor((ymax-ymin)/spacing+1e-9);
+  for(let k=0;k<=n;k++){
+    const y=ymin+(k+0.5)*spacing;
+    if(y>=ymax)break;
+    let c=[];for(const p of clear)c=c.concat(crossings(p,y));
+    let h=[];for(const p of keep)h=h.concat(crossings(p,y));
+    const segs=subtractIv(mergeIv(c),mergeIv(h)).filter(s=>s[1]-s[0]>=minLen);
+    if(segs.length)rows.push({y,segs});
+  }
+  return rows;
+}
+/* Snake order: even rows left to right, odd rows right to left. */
+function snakeOrder(rows){
+  const out=[];
+  rows.forEach((r,i)=>{
+    const segs=i%2===0?r.segs:r.segs.slice().reverse();
+    for(const [a,b] of segs)out.push(i%2===0?{y:r.y,x0:a,x1:b}:{y:r.y,x0:b,x1:a});
+  });
+  return out;
+}
+function gdsReal(v){
+  const b=new Uint8Array(8);if(v===0)return b;
+  let sign=v<0?1:0,m=Math.abs(v),e=0;
+  while(m>=1){m/=16;e++;}while(m<1/16){m*=16;e--;}
+  let mant=BigInt(Math.round(m*Math.pow(2,56)));
+  if(mant>=(1n<<56n)){mant>>=4n;e++;}
+  b[0]=(sign<<7)|(e+64);
+  for(let i=7;i>=1;i--){b[i]=Number(mant&0xffn);mant>>=8n;}
+  return b;
+}
+function buildGds({rings,segs,layer=2,datatype=0,libName='LIB',cellName='TOP',now=new Date()}){
+  const parts=[];
+  const rec=(type,dt,payload)=>{const len=4+payload.length;const b=new Uint8Array(len);b[0]=len>>8;b[1]=len&255;b[2]=type;b[3]=dt;b.set(payload,4);parts.push(b);};
+  const i16=(...a)=>{const b=new Uint8Array(a.length*2);const dv=new DataView(b.buffer);a.forEach((v,i)=>dv.setInt16(i*2,v));return b;};
+  const str=s=>{const a=Array.from(s).map(c=>c.charCodeAt(0));if(a.length%2)a.push(0);return Uint8Array.from(a);};
+  const xy=pts=>{const b=new Uint8Array(pts.length*8);const dv=new DataView(b.buffer);pts.forEach((p,i)=>{dv.setInt32(i*8,Math.round(p[0]*1000));dv.setInt32(i*8+4,Math.round(p[1]*1000));});return b;};
+  const d=[now.getFullYear(),now.getMonth()+1,now.getDate(),now.getHours(),now.getMinutes(),now.getSeconds()];
+  rec(0,2,i16(600));
+  rec(1,2,i16(...d,...d));
+  rec(2,6,str(libName));
+  const u=new Uint8Array(16);u.set(gdsReal(1e-3),0);u.set(gdsReal(1e-9),8);rec(3,5,u);
+  rec(5,2,i16(...d,...d));
+  rec(6,6,str(cellName));
+  const boundary=pts=>{rec(8,0,new Uint8Array(0));rec(0x0d,2,i16(layer));rec(0x0e,2,i16(datatype));rec(0x10,3,xy(pts));rec(0x11,0,new Uint8Array(0));};
+  for(const r of rings){boundary(r.concat([r[0]]));}
+  for(const s of segs){const P=[s.x0,s.y],Q=[s.x1,s.y];boundary([P,Q,Q,P]);}
+  rec(7,0,new Uint8Array(0));
+  rec(4,0,new Uint8Array(0));
+  let n=0;for(const p of parts)n+=p.length;
+  const out=new Uint8Array(n);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}
+  return out;
+}
+/* Gwyddion ASCII matrix export: '# Width: 65 µm' style header lines, then rows of numbers (top row first). */
+function parseMatrixText(text){
+  const unit=u=>{u=(u||'').replace('μ','µ').trim();return {'µm':1,'um':1,'nm':1e-3,'m':1e6,'mm':1e3,'pm':1e-6}[u];};
+  let wUm=null,hUm=null,channel='';const rows=[];
+  for(const line of text.split(/\r?\n/)){
+    const l=line.trim();if(!l)continue;
+    if(l[0]==='#'){
+      let m=/^#\s*Width:\s*([\d.eE+-]+)\s*(\S*)/i.exec(l);if(m){const k=unit(m[2]);if(k)wUm=+m[1]*k;continue;}
+      m=/^#\s*Height:\s*([\d.eE+-]+)\s*(\S*)/i.exec(l);if(m){const k=unit(m[2]);if(k)hUm=+m[1]*k;continue;}
+      m=/^#\s*Channel:\s*(.*)$/i.exec(l);if(m)channel=m[1].trim();
+      continue;
+    }
+    const vals=l.split(/[\s,;]+/).filter(Boolean).map(Number);
+    if(vals.some(Number.isNaN))continue;
+    rows.push(vals);
+  }
+  if(rows.length<2)throw new Error('No numeric image matrix found in this text file.');
+  const w=rows[0].length;
+  if(w<2||rows.some(r=>r.length!==w))throw new Error('The rows of this text file are not all the same length.');
+  const h=rows.length,z=new Float32Array(w*h);
+  rows.forEach((r,i)=>z.set(r,i*w));
+  return {w,h,z,wUm,hUm,channel};
+}
+/* PURE-END */
+
+/* ---------- App ---------- */
+const $=id=>document.getElementById(id);
+const S={scan:null,rot:0,shapes:[],sel:null,tool:'poly',mode:'clear',draft:null,drag:null,view:{s:10,ox:0,oy:0},undo:[],redo:[],geo:null,nid:null,nextId:1,cursor:[0,0],shift:false,edgePts:[],imgCanvas:null,space:false};
+const cv=$('cv'),ctx=cv.getContext('2d');
+const hasClip=()=>typeof polygonClipping!=='undefined';
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let toastTimer;
+function toast(msg){const t=$('toast');t.textContent=msg;t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{t.hidden=true;},3600);}
+function setHint(){
+  const h={poly:'Click to place corners. Hold Shift for right angles. Enter or click the first point to close.',rect:'Drag to draw a rectangle. Hold Shift for a square.',edit:'Click a shape to select it. Drag a corner to reshape, or the shape to move it. Drag empty space to pan.',edge:'Click two points along a flake edge. The image rotates so that edge becomes vertical (or horizontal, see Level edge to).'};
+  $('hint').textContent=h[S.tool]+' Scroll to zoom, hold Space and drag to pan.';
+}
+/* ----- scan to canvas ----- */
+function percentile(sorted,p){return sorted[Math.min(sorted.length-1,Math.max(0,Math.floor(p/100*(sorted.length-1))))];}
+function renderScanImage(){
+  const sc=S.scan;if(!sc){S.imgCanvas=null;return;}
+  const {w,h}=sc;let z=Float32Array.from(sc.z);
+  if($('flipV').checked){const t=new Float32Array(z.length);for(let r=0;r<h;r++)t.set(z.subarray((h-1-r)*w,(h-r)*w),r*w);z=t;}
+  if($('levelPlane').checked){
+    let Sx=0,Sy=0,Sxx=0,Syy=0,Sxy=0,Sz=0,Sxz=0,Syz=0;const N=w*h;
+    for(let r=0;r<h;r++){const y=r/h-0.5;for(let c=0;c<w;c++){const x=c/w-0.5,v=z[r*w+c];Sx+=x;Sy+=y;Sxx+=x*x;Syy+=y*y;Sxy+=x*y;Sz+=v;Sxz+=x*v;Syz+=y*v;}}
+    const M=[[N,Sx,Sy],[Sx,Sxx,Sxy],[Sy,Sxy,Syy]],b=[Sz,Sxz,Syz];
+    const det=A=>A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+    const D=det(M);
+    if(Math.abs(D)>1e-12){
+      const col=(k)=>{const A=M.map((row,i)=>row.map((v,j)=>j===k?b[i]:v));return det(A)/D;};
+      const a0=col(0),a1=col(1),a2=col(2);
+      for(let r=0;r<h;r++){const y=r/h-0.5;for(let c=0;c<w;c++){const x=c/w-0.5;z[r*w+c]-=a0+a1*x+a2*y;}}
+    }
+  }
+  if($('alignRows').checked){
+    for(let r=0;r<h;r++){const row=Array.from(z.subarray(r*w,(r+1)*w)).sort((a,b)=>a-b);const med=row[w>>1];for(let c=0;c<w;c++)z[r*w+c]-=med;}
+  }
+  const step=Math.max(1,Math.floor(z.length/200000));const samp=[];for(let i=0;i<z.length;i+=step)samp.push(z[i]);samp.sort((a,b)=>a-b);
+  const lo=percentile(samp,+$('cLo').value),hi=percentile(samp,+$('cHi').value),span=hi-lo||1;
+  const oc=document.createElement('canvas');oc.width=w;oc.height=h;
+  const id=oc.getContext('2d').createImageData(w,h);
+  for(let i=0;i<z.length;i++){const g=Math.max(0,Math.min(255,Math.round((z[i]-lo)/span*255)));id.data[i*4]=g;id.data[i*4+1]=g;id.data[i*4+2]=g;id.data[i*4+3]=255;}
+  oc.getContext('2d').putImageData(id,0,0);
+  S.imgCanvas=oc;
+}
+function setScan(scan,keepShapes){
+  S.scan=scan;
+  $('sizeW').value=+scan.wUm.toFixed(3);$('sizeH').value=+scan.hUm.toFixed(3);
+  renderScanImage();
+  if(!keepShapes){S.shapes=[];S.sel=null;S.undo=[];S.redo=[];}
+  fitView();changed(true);
+}
+function exampleScan(){
+  const w=256,h=256,z=new Float32Array(w*h);
+  const flake=[[-14,12],[8,14],[15,2],[6,-14],[-7,-13],[-15,-2]];
+  const inside=(x,y)=>{let c=false;for(let i=0,j=flake.length-1;i<flake.length;j=i++){const a=flake[i],b=flake[j];if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])c=!c;}return c;};
+  let seed=7;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
+  for(let r=0;r<h;r++)for(let c=0;c<w;c++){
+    const x=(c/w-0.5)*40,y=(0.5-r/h)*40;
+    let v=0.25*(x/40)+0.18*(y/40)+(rnd()-0.5)*0.05;
+    if(inside(x,y)){v+=2.2;if(Math.hypot(x-2,y+3)<6)v+=1.1;if(x<-6&&y>4)v+=0.6;}
+    z[r*w+c]=v;
+  }
+  return {w,h,z,wUm:40,hUm:40,name:'Example scan'};
+}
+/* ----- geometry ----- */
+function polysOf(mode){return S.shapes.filter(s=>s.mode===mode).map(s=>s.pts);}
+function compute(){
+  const clear=polysOf('clear'),keep=polysOf('keep');
+  const spacing=+$('spacing').value;
+  const geo={rings:[],segs:[],rows:[],fallback:false,len:0,perim:0};
+  if(!clear.length){S.geo=geo;return;}
+  if(hasClip()){
+    try{
+      let region=polygonClipping.union(...clear.map(p=>[p]));
+      if(keep.length)region=polygonClipping.difference(region,...keep.map(p=>[p]));
+      for(const poly of region)for(const ring of poly){const r=ring.slice();if(r.length>1&&r[0][0]===r[r.length-1][0]&&r[0][1]===r[r.length-1][1])r.pop();if(r.length>=3)geo.rings.push(r);}
+    }catch(e){geo.fallback=true;}
+  }else geo.fallback=true;
+  if(geo.fallback){geo.rings=clear.concat(keep).map(p=>p.slice());}
+  geo.rows=buildFill(clear,keep,spacing);
+  geo.segs=snakeOrder(geo.rows);
+  for(const s of geo.segs)geo.len+=Math.abs(s.x1-s.x0);
+  for(const r of geo.rings){for(let i=0;i<r.length;i++){const a=r[i],b=r[(i+1)%r.length];geo.perim+=Math.hypot(b[0]-a[0],b[1]-a[1]);}}
+  S.geo=geo;
+}
+function updateStats(){
+  const g=S.geo,sp=+$('speed').value||10;
+  const total=g.len+g.perim;
+  const t=total/sp;
+  const fmtT=s=>s>=3600?`${Math.floor(s/3600)} h ${Math.round(s%3600/60)} min`:s>=60?`${Math.floor(s/60)} min ${Math.round(s%60)} s`:`${s.toFixed(0)} s`;
+  const clearArea=S.shapes.filter(s=>s.mode==='clear').reduce((a,s)=>a+polyArea(s.pts),0);
+  $('stats').innerHTML=`<div><span>Lines</span><b>${g.segs.length}</b></div><div><span>Outlines</span><b>${g.rings.length}</b></div><div><span>Line length</span><b>${g.len.toFixed(1)} µm</b></div><div><span>Outline length</span><b>${g.perim.toFixed(1)} µm</b></div><div><span>Clear area</span><b>${clearArea.toFixed(1)} µm²</b></div><div><span>Est. time</span><b>${total?fmtT(t):'0 s'}</b></div>`;
+  const w=[];
+  if(g.fallback&&S.shapes.some(s=>s.mode==='clear'))w.push('The outline merge library did not load, so each shape is outlined on its own. Fill lines are still correct. Connect to the internet and reload to merge overlapping shapes.');
+  if(g.segs.length>40000)w.push('This pattern has a very large number of lines. Increase the spacing or shrink the area.');
+  if(g.rings.some(r=>r.length+1>8190))w.push('An outline has more than 8190 points, which GDS does not allow in one polygon.');
+  $('warn').innerHTML=w.map(t=>`<div class="banner err">${t}</div>`).join('');
+  $('expGds').disabled=!S.geo.rings.length;$('expSvg').disabled=!S.geo.rings.length;
+}
+function updateList(){
+  const ul=$('shapeList');ul.innerHTML='';
+  if(!S.shapes.length){ul.innerHTML='<li class="empty" style="border:0;cursor:default">No shapes yet. Draw a clear area to begin.</li>';return;}
+  const counts={clear:0,keep:0,};
+  S.shapes.forEach(s=>{
+    counts[s.mode]++;
+    const li=document.createElement('li');li.setAttribute('aria-selected',s.id===S.sel?'true':'false');
+    li.innerHTML=`<span class="chip ${s.mode}"></span><span class="nm">${s.mode==='clear'?'Clear':'Keep'} ${s.rect?'rectangle':'polygon'} ${counts[s.mode]}</span><span class="ar">${polyArea(s.pts).toFixed(1)} µm²</span>`;
+    li.onclick=()=>{S.sel=s.id;updateList();draw();};
+    ul.appendChild(li);
+  });
+}
+function changed(noSnapshot){compute();updateStats();updateList();draw();}
+function snapshot(){S.undo.push(JSON.stringify({shapes:S.shapes,rot:S.rot}));if(S.undo.length>100)S.undo.shift();S.redo=[];}
+function restore(str){const o=JSON.parse(str);S.shapes=o.shapes;S.rot=o.rot;S.sel=null;syncRot();changed();}
+function undo(){if(!S.undo.length)return;S.redo.push(JSON.stringify({shapes:S.shapes,rot:S.rot}));restore(S.undo.pop());}
+function redo(){if(!S.redo.length)return;S.undo.push(JSON.stringify({shapes:S.shapes,rot:S.rot}));restore(S.redo.pop());}
+function addShape(pts,rect){snapshot();const s={id:S.nextId++,mode:S.mode,pts,rect:!!rect};S.shapes.push(s);S.sel=s.id;changed();}
+/* ----- view ----- */
+function resize(){const r=cv.getBoundingClientRect(),dpr=window.devicePixelRatio||1;cv.width=Math.max(1,Math.round(r.width*dpr));cv.height=Math.max(1,Math.round(r.height*dpr));ctx.setTransform(dpr,0,0,dpr,0,0);draw();}
+function fitView(){
+  const r=cv.getBoundingClientRect();const sc=S.scan;const W=sc?+$('sizeW').value:40,H=sc?+$('sizeH').value:40;
+  const t=S.rot*Math.PI/180;const bw=Math.abs(W*Math.cos(t))+Math.abs(H*Math.sin(t)),bh=Math.abs(W*Math.sin(t))+Math.abs(H*Math.cos(t));
+  S.view.s=Math.min(r.width/(bw*1.08),r.height/(bh*1.08));S.view.ox=r.width/2;S.view.oy=r.height/2;
+}
+const toScreen=(x,y)=>[S.view.ox+S.view.s*x,S.view.oy-S.view.s*y];
+const toWorld=(px,py)=>[(px-S.view.ox)/S.view.s,(S.view.oy-py)/S.view.s];
+const snapV=v=>{const g=+$('snap').value;return g>0?+(Math.round(v/g)*g).toFixed(4):v;};
+/* ----- drawing ----- */
+function niceLen(maxUm){const p=Math.pow(10,Math.floor(Math.log10(maxUm)));for(const m of [5,2,1]){if(m*p<=maxUm)return m*p;}return p;}
+function draw(){
+  const r=cv.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);
+  ctx.fillStyle=css('--stage');ctx.fillRect(0,0,r.width,r.height);
+  const V=S.view,W=+$('sizeW').value,H=+$('sizeH').value;
+  if(S.imgCanvas){
+    ctx.save();ctx.transform(V.s,0,0,-V.s,V.ox,V.oy);ctx.rotate(S.rot*Math.PI/180);ctx.scale(1,-1);
+    ctx.imageSmoothingEnabled=V.s*W/S.imgCanvas.width>3?false:true;
+    ctx.drawImage(S.imgCanvas,-W/2,-H/2,W,H);ctx.restore();
+    ctx.save();ctx.transform(V.s,0,0,-V.s,V.ox,V.oy);ctx.rotate(S.rot*Math.PI/180);
+    ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1/V.s;ctx.setLineDash([6/V.s,4/V.s]);ctx.strokeRect(-W/2,-H/2,W,H);ctx.restore();
+  }else{
+    ctx.fillStyle=css('--stage-fg');ctx.font='14px '+css('--font-body');ctx.textAlign='center';ctx.fillText('Open a scan or load the example to begin',r.width/2,r.height/2);
+  }
+  const cClear=css('--clear'),cKeep=css('--keep'),cPath=css('--path'),cAcc=css('--accent');
+  const tracePoly=(pts,close=true)=>{ctx.beginPath();pts.forEach((p,i)=>{const [sx,sy]=toScreen(p[0],p[1]);i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy);});if(close)ctx.closePath();};
+  for(const s of S.shapes){
+    const col=s.mode==='clear'?cClear:cKeep;
+    tracePoly(s.pts);ctx.globalAlpha=s.mode==='clear'?.2:.28;ctx.fillStyle=col;ctx.fill();ctx.globalAlpha=1;
+    ctx.lineWidth=s.id===S.sel?2.5:1.5;ctx.strokeStyle=col;ctx.setLineDash(s.mode==='keep'?[6,4]:[]);ctx.stroke();ctx.setLineDash([]);
+  }
+  if($('showPath').checked&&S.geo){
+    const g=S.geo;
+    ctx.strokeStyle=cPath;ctx.lineWidth=1;ctx.globalAlpha=.85;ctx.beginPath();
+    for(const s of g.segs){const a=toScreen(s.x0,s.y),b=toScreen(s.x1,s.y);ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);}
+    ctx.stroke();ctx.globalAlpha=1;
+    ctx.lineWidth=2;for(const ring of g.rings){tracePoly(ring);ctx.stroke();}
+    if(g.segs.length){const a=toScreen(g.segs[0].x0,g.segs[0].y);ctx.fillStyle=cPath;ctx.beginPath();ctx.arc(a[0],a[1],4,0,7);ctx.fill();}
+  }
+  if(S.tool==='edit'){
+    const s=S.shapes.find(x=>x.id===S.sel);
+    if(s){ctx.fillStyle='#fff';ctx.strokeStyle=cAcc;ctx.lineWidth=2;for(const p of s.pts){const [x,y]=toScreen(p[0],p[1]);ctx.beginPath();ctx.rect(x-4.5,y-4.5,9,9);ctx.fill();ctx.stroke();}for(let i=0;i<s.pts.length;i++)segLabel(s.pts[i],s.pts[(i+1)%s.pts.length]);}
+  }
+  if(S.draft){
+    const col=S.mode==='clear'?cClear:cKeep;const d=S.draft;
+    if(d.type==='poly'){const pts=d.pts.concat([d.cur]);tracePoly(pts,false);ctx.strokeStyle=col;ctx.lineWidth=2;ctx.stroke();
+      ctx.fillStyle='#fff';for(const p of d.pts){const [x,y]=toScreen(p[0],p[1]);ctx.beginPath();ctx.arc(x,y,4,0,7);ctx.fill();}
+      const [fx,fy]=toScreen(d.pts[0][0],d.pts[0][1]);ctx.strokeStyle='#fff';ctx.beginPath();ctx.arc(fx,fy,8,0,7);ctx.stroke();for(let i=1;i<pts.length;i++)segLabel(pts[i-1],pts[i]);}
+    else if(d.type==='rect'){const pts=rectPts(d.a,d.cur);tracePoly(pts);ctx.globalAlpha=.2;ctx.fillStyle=col;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle=col;ctx.lineWidth=2;ctx.stroke();segLabel(pts[0],pts[1]);segLabel(pts[1],pts[2]);}
+  }
+  if(S.tool==='edge'&&S.edgePts.length){
+    ctx.strokeStyle=cAcc;ctx.fillStyle=cAcc;ctx.lineWidth=2;
+    const pts=S.edgePts.concat(S.edgePts.length===1?[S.cursor]:[]);
+    tracePoly(pts,false);ctx.stroke();if(pts.length===2)segLabel(pts[0],pts[1]);for(const p of S.edgePts){const [x,y]=toScreen(p[0],p[1]);ctx.beginPath();ctx.arc(x,y,4,0,7);ctx.fill();}
+  }
+  const len=niceLen(130/V.s),px=len*V.s;
+  ctx.strokeStyle=css('--stage-fg');ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(12,r.height-40);ctx.lineTo(12+px,r.height-40);ctx.moveTo(12,r.height-45);ctx.lineTo(12,r.height-35);ctx.moveTo(12+px,r.height-45);ctx.lineTo(12+px,r.height-35);ctx.stroke();
+  $('scalelabel').textContent=`${len} µm bar · image rotated ${S.rot.toFixed(1)}°`;
+}
+/* Length label beside a segment, in µm. */
+function segLabel(a,b){
+  const len=Math.hypot(b[0]-a[0],b[1]-a[1]);if(len<1e-6)return;
+  const [x0,y0]=toScreen(a[0],a[1]),[x1,y1]=toScreen(b[0],b[1]);
+  const dx=x1-x0,dy=y1-y0,d=Math.hypot(dx,dy)||1;let nx=-dy/d,ny=dx/d;if(ny>0){nx=-nx;ny=-ny;}
+  const mx=(x0+x1)/2+nx*13,my=(y0+y1)/2+ny*13;
+  const txt=len.toFixed(2)+' µm';
+  ctx.save();ctx.font='11px '+css('--font-mono');ctx.textAlign='center';ctx.textBaseline='middle';
+  const tw=ctx.measureText(txt).width;
+  ctx.fillStyle='rgba(0,0,0,.75)';ctx.fillRect(mx-tw/2-4,my-9,tw+8,18);
+  ctx.fillStyle='#fff';ctx.fillText(txt,mx,my);ctx.restore();
+}
+function rectPts(a,b){return [[a[0],a[1]],[b[0],a[1]],[b[0],b[1]],[a[0],b[1]]];}
+function squareCorner(a,c){const dx=c[0]-a[0],dy=c[1]-a[1],m=Math.max(Math.abs(dx),Math.abs(dy));return [a[0]+Math.sign(dx||1)*m,a[1]+Math.sign(dy||1)*m];}
+/* ----- pointer ----- */
+function evWorld(e){const r=cv.getBoundingClientRect();return {px:e.clientX-r.left,py:e.clientY-r.top};}
+function pointInPoly(p,poly){let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])c=!c;}return c;}
+function hitVertex(px,py){
+  const s=S.shapes.find(x=>x.id===S.sel);if(!s)return null;
+  for(let i=0;i<s.pts.length;i++){const [x,y]=toScreen(s.pts[i][0],s.pts[i][1]);if(Math.hypot(x-px,y-py)<=9)return {s,i};}
+  return null;
+}
+function hitShape(w){for(let i=S.shapes.length-1;i>=0;i--){if(pointInPoly(w,S.shapes[i].pts))return S.shapes[i];}return null;}
+function finishPoly(){
+  const d=S.draft;if(!d||d.type!=='poly')return;
+  if(d.pts.length>=3)addShape(d.pts.slice(),false);
+  S.draft=null;draw();
+}
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  const {px,py}=evWorld(e);let w=toWorld(px,py);
+  S.shift=e.shiftKey;
+  if(e.button===1||S.space||(e.button===0&&S.tool==='edit'&&!hitVertex(px,py)&&!hitShape(w))){
+    if(S.tool==='edit'&&!S.space&&e.button===0){S.sel=null;updateList();}
+    S.drag={type:'pan',x:px,y:py,ox:S.view.ox,oy:S.view.oy};return;
+  }
+  if(e.button!==0)return;
+  if(S.tool==='poly'){
+    const d=S.draft;
+    if(d&&d.pts.length>=3){const [fx,fy]=toScreen(d.pts[0][0],d.pts[0][1]);if(Math.hypot(fx-px,fy-py)<=10){finishPoly();return;}}
+    let p=w;
+    if(d&&e.shiftKey){const L=d.pts[d.pts.length-1];p=Math.abs(w[0]-L[0])>=Math.abs(w[1]-L[1])?[w[0],L[1]]:[L[0],w[1]];}
+    p=[snapV(p[0]),snapV(p[1])];
+    if(!d)S.draft={type:'poly',pts:[p],cur:p};else if(!(d.pts[d.pts.length-1][0]===p[0]&&d.pts[d.pts.length-1][1]===p[1]))d.pts.push(p);
+    draw();
+  }else if(S.tool==='rect'){
+    const a=[snapV(w[0]),snapV(w[1])];S.draft={type:'rect',a,cur:a};
+  }else if(S.tool==='edge'){
+    S.edgePts.push([w[0],w[1]]);
+    if(S.edgePts.length===2){
+      const [a,b]=S.edgePts;const ang=Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI;
+      const vert=$('edgeTarget').value==='v';
+      let delta=(vert?90:0)-ang;
+      while(delta>90)delta-=180;while(delta<=-90)delta+=180;
+      S.edgePts=[];setRotation(S.rot+delta);toast(`Rotated by ${delta.toFixed(1)}° so the edge is ${vert?'vertical':'horizontal'}`);
+    }
+    draw();
+  }else if(S.tool==='edit'){
+    const hv=hitVertex(px,py);
+    if(hv){snapshot();S.drag={type:'vertex',s:hv.s,i:hv.i,opp:hv.s.rect?hv.s.pts[(hv.i+2)%4].slice():null};}
+    else{const hs=hitShape(w);if(hs){S.sel=hs.id;snapshot();S.drag={type:'move',s:hs,last:w};updateList();}}
+    draw();
+  }
+});
+cv.addEventListener('pointermove',e=>{
+  const {px,py}=evWorld(e);let w=toWorld(px,py);S.shift=e.shiftKey;
+  S.cursor=[snapV(w[0]),snapV(w[1])];
+  $('coord').textContent=`x, y: ${S.cursor[0].toFixed(2)}, ${S.cursor[1].toFixed(2)} µm`;
+  const d=S.drag;
+  if(d){
+    if(d.type==='pan'){S.view.ox=d.ox+px-d.x;S.view.oy=d.oy+py-d.y;}
+    else if(d.type==='vertex'){
+      let p=[snapV(w[0]),snapV(w[1])];
+      if(d.s.rect){if(e.shiftKey)p=squareCorner(d.opp,p);d.s.pts=orderRect(d.opp,p);}
+      else d.s.pts[d.i]=p;
+      compute();updateStats();
+    }
+    else if(d.type==='move'){const dx=snapV(w[0])-snapV(d.last[0]),dy=snapV(w[1])-snapV(d.last[1]);if(dx||dy){d.s.pts=d.s.pts.map(p=>[p[0]+dx,p[1]+dy]);d.last=[d.last[0]+dx,d.last[1]+dy];compute();updateStats();}}
+    draw();return;
+  }
+  const dr=S.draft;
+  if(dr){
+    if(dr.type==='poly'){let p=w;if(e.shiftKey){const L=dr.pts[dr.pts.length-1];p=Math.abs(w[0]-L[0])>=Math.abs(w[1]-L[1])?[w[0],L[1]]:[L[0],w[1]];}dr.cur=[snapV(p[0]),snapV(p[1])];}
+    else{let c=[snapV(w[0]),snapV(w[1])];if(e.shiftKey)c=squareCorner(dr.a,c);dr.cur=c;}
+  }
+  if(S.tool==='edge'||dr)draw();
+});
+function orderRect(a,b){const x0=Math.min(a[0],b[0]),x1=Math.max(a[0],b[0]),y0=Math.min(a[1],b[1]),y1=Math.max(a[1],b[1]);return [[x0,y0],[x1,y0],[x1,y1],[x0,y1]];}
+cv.addEventListener('pointerup',e=>{
+  const d=S.drag;
+  if(d){S.drag=null;if(d.type==='vertex'||d.type==='move'){changed();}return;}
+  const dr=S.draft;
+  if(dr&&dr.type==='rect'){
+    S.draft=null;
+    if(Math.abs(dr.cur[0]-dr.a[0])>=0.05&&Math.abs(dr.cur[1]-dr.a[1])>=0.05)addShape(orderRect(dr.a,dr.cur),true);else draw();
+  }
+});
+cv.addEventListener('dblclick',e=>{if(S.tool==='poly'&&S.draft){const d=S.draft;if(d.pts.length>=4){d.pts.pop();}finishPoly();}});
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();const {px,py}=evWorld(e);const w=toWorld(px,py);
+  const k=Math.exp(-e.deltaY*0.0015);S.view.s=Math.max(1,Math.min(4000,S.view.s*k));
+  S.view.ox=px-w[0]*S.view.s;S.view.oy=py+w[1]*S.view.s;draw();
+},{passive:false});
+/* ----- rotation ----- */
+function syncRot(){const v=Math.round(S.rot*10)/10;$('rot').value=v;$('rotNum').value=v;}
+function setRotation(deg){
+  while(deg>180)deg-=360;while(deg<-180)deg+=360;deg=Math.round(deg*10)/10;
+  const delta=deg-S.rot;if(delta===0){syncRot();return;}
+  snapshot();
+  for(const s of S.shapes)s.pts=rotatePts(s.pts,delta);
+  S.rot=deg;syncRot();changed();
+}
+$('rot').addEventListener('input',e=>setRotation(+e.target.value));
+$('rotNum').addEventListener('change',e=>setRotation(+e.target.value||0));
+$('rotM90').onclick=()=>setRotation(S.rot-90);$('rotP90').onclick=()=>setRotation(S.rot+90);
+$('rotM01').onclick=()=>setRotation(S.rot-0.1);$('rotP01').onclick=()=>setRotation(S.rot+0.1);
+/* ----- tools ----- */
+function setTool(t){S.tool=t;S.draft=null;S.drag=null;S.edgePts=[];['Poly','Rect','Edit','Edge'].forEach(n=>$('tool'+n).setAttribute('aria-pressed',String(t===n.toLowerCase())));cv.style.cursor=t==='edit'?'default':'crosshair';setHint();draw();}
+function setMode(m){S.mode=m;$('modeClear').setAttribute('aria-pressed',String(m==='clear'));$('modeKeep').setAttribute('aria-pressed',String(m==='keep'));draw();}
+$('toolPoly').onclick=()=>setTool('poly');$('toolRect').onclick=()=>setTool('rect');$('toolEdit').onclick=()=>setTool('edit');$('toolEdge').onclick=()=>setTool('edge');
+$('modeClear').onclick=()=>setMode('clear');$('modeKeep').onclick=()=>setMode('keep');
+$('undoBtn').onclick=undo;$('redoBtn').onclick=redo;$('fitBtn').onclick=()=>{fitView();draw();};
+$('toggleSel').onclick=()=>{const s=S.shapes.find(x=>x.id===S.sel);if(!s)return toast('Select a shape in the list first');snapshot();s.mode=s.mode==='clear'?'keep':'clear';changed();};
+$('delSel').onclick=()=>{const i=S.shapes.findIndex(x=>x.id===S.sel);if(i<0)return toast('Select a shape in the list first');snapshot();S.shapes.splice(i,1);S.sel=null;changed();};
+$('clearAll').onclick=()=>{if(!S.shapes.length)return;snapshot();S.shapes=[];S.sel=null;changed();};
+['spacing','speed'].forEach(id=>$(id).addEventListener('input',()=>changed()));
+$('showPath').addEventListener('change',draw);
+['levelPlane','alignRows','flipV','cLo','cHi'].forEach(id=>$(id).addEventListener('input',()=>{renderScanImage();draw();}));
+['sizeW','sizeH'].forEach(id=>$(id).addEventListener('change',()=>{if(S.scan){S.scan.wUm=+$('sizeW').value;S.scan.hUm=+$('sizeH').value;}draw();}));
+$('themeBtn').onclick=()=>{const r=document.documentElement;const dark=(r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches);r.dataset.theme=dark?'light':'dark';draw();};
+window.addEventListener('keydown',e=>{
+  S.shift=e.shiftKey;
+  const tag=(e.target.tagName||'').toLowerCase();if(tag==='input'||tag==='select'||tag==='textarea')return;
+  const k=e.key;
+  if(k===' '){S.space=true;e.preventDefault();return;}
+  if((e.ctrlKey||e.metaKey)&&k.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}
+  if((e.ctrlKey||e.metaKey)&&k.toLowerCase()==='y'){e.preventDefault();redo();return;}
+  if(k==='Escape'){S.draft=null;S.edgePts=[];draw();return;}
+  if(k==='Enter'){finishPoly();return;}
+  if(k==='Backspace'||k==='Delete'){
+    if(S.draft&&S.draft.type==='poly'){e.preventDefault();S.draft.pts.pop();if(!S.draft.pts.length)S.draft=null;draw();return;}
+    if(S.sel!=null){e.preventDefault();$('delSel').click();}return;
+  }
+  const lk=k.toLowerCase();
+  if(lk==='p')setTool('poly');else if(lk==='r')setTool('rect');else if(lk==='v')setTool('edit');else if(lk==='e')setTool('edge');else if(lk==='m')setMode(S.mode==='clear'?'keep':'clear');
+});
+window.addEventListener('keyup',e=>{if(e.key===' ')S.space=false;S.shift=e.shiftKey;});
+/* ----- files ----- */
+function showBanner(kind,msg){$('banner').innerHTML=msg?`<div class="banner ${kind}">${msg}</div>`:'';}
+async function openScanFile(file){
+  showBanner('','');
+  if(!/\.txt$/i.test(file.name)){showBanner('err','Open the .txt file exported from Gwyddion (File, Save as, ASCII matrix).');return;}
+  try{
+    const r=parseMatrixText(await file.text());
+    $('levelPlane').checked=true;$('flipV').checked=false;
+    const W=r.wUm||+$('sizeW').value||40,H=r.hUm||W*r.h/r.w;
+    setScan({w:r.w,h:r.h,z:r.z,wUm:W,hUm:H,name:file.name});
+    showBanner('note',r.wUm?`Loaded ${r.channel||'scan'}: ${r.w} \u00d7 ${r.h} points, ${W.toFixed(2)} \u00d7 ${H.toFixed(2)} \u00b5m, read from the file header.`:'This file has no size header. Enter the scan size in the fields below.');
+  }catch(err){showBanner('err',err.message||String(err));}
+}
+$('fileIn').addEventListener('change',e=>{if(e.target.files[0])openScanFile(e.target.files[0]);e.target.value='';});
+$('exampleBtn').onclick=()=>{showBanner('note','Example scan and shapes. Open your own scan, then use Delete all to remove the example shapes.');$('levelPlane').checked=true;setScan(exampleScan());loadExampleShapes();};
+function loadExampleShapes(){
+  S.shapes=[{id:S.nextId++,mode:'clear',rect:false,pts:[[-10,9],[6,9],[2,-8],[-5,-8]]},{id:S.nextId++,mode:'keep',rect:true,pts:[[-3,-1],[0,-1],[0,2],[-3,2]]}];S.rot=0;syncRot();changed();
+}
+const stage=$('stage');
+stage.addEventListener('dragover',e=>e.preventDefault());
+stage.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files[0])openScanFile(e.dataTransfer.files[0]);});
+/* ----- export ----- */
+function exportRings(){
+  const g=S.geo;let ox=0,oy=0;
+  if($('origin').value==='corner'){let mx=Infinity,my=Infinity;for(const r of g.rings)for(const p of r){mx=Math.min(mx,p[0]);my=Math.min(my,p[1]);}ox=mx;oy=my;}
+  const sh=p=>[p[0]-ox,p[1]-oy];
+  return {rings:g.rings.map(r=>r.map(sh)),segs:g.segs.map(s=>({y:s.y-oy,x0:s.x0-ox,x1:s.x1-ox})),ox,oy};
+}
+async function saveFile(name,data){
+  try{
+    if(window.claude&&window.claude.use){
+      const dl=await window.claude.use('downloads');
+      if(dl){
+        try{await dl.save({filename:name,data});toast('Saved '+name);return;}
+        catch(err){
+          if(err&&err.code==='declined')return;
+          if(err&&err.code==='rejected_extension'){
+            try{await dl.save({filename:name+'.txt',data});toast(`Saved as ${name}.txt. Rename it to ${name} before loading it on the AFM.`);return;}catch(e2){if(e2&&e2.code==='declined')return;}
+          }
+        }
+      }
+    }
+  }catch(e){}
+  const blob=data instanceof Blob?data:new Blob([data]);const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  toast('Downloaded '+name);
+}
+$('expGds').onclick=()=>{
+  if(!S.geo.rings.length)return;const x=exportRings();
+  const bytes=buildGds({rings:x.rings,segs:x.segs,layer:+$('layer').value||0,datatype:+$('dtype').value||0});
+  saveFile('graphite_cut.gds',bytes);
+};
+$('expSvg').onclick=()=>{
+  if(!S.geo.rings.length)return;const x=exportRings();
+  let mnx=Infinity,mny=Infinity,mxx=-Infinity,mxy=-Infinity;for(const r of x.rings)for(const p of r){mnx=Math.min(mnx,p[0]);mny=Math.min(mny,p[1]);mxx=Math.max(mxx,p[0]);mxy=Math.max(mxy,p[1]);}
+  const pad=1,f=v=>+v.toFixed(4);
+  const ring=r=>'M'+r.map(p=>f(p[0])+' '+f(-p[1])).join(' L')+' Z';
+  const lines=x.segs.map(s=>`M${f(s.x0)} ${f(-s.y)} L${f(s.x1)} ${f(-s.y)}`).join(' ');
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${f(mnx-pad)} ${f(-mxy-pad)} ${f(mxx-mnx+2*pad)} ${f(mxy-mny+2*pad)}" width="${f((mxx-mnx+2*pad)*20)}" height="${f((mxy-mny+2*pad)*20)}"><rect x="${f(mnx-pad)}" y="${f(-mxy-pad)}" width="${f(mxx-mnx+2*pad)}" height="${f(mxy-mny+2*pad)}" fill="#fff"/><path d="${lines}" stroke="#d8432b" stroke-width="0.02" fill="none"/><path d="${x.rings.map(ring).join(' ')}" stroke="#000" stroke-width="0.06" fill="none"/></svg>`;
+  saveFile('graphite_cut.svg',svg);
+};
+$('saveJson').onclick=()=>saveFile('graphite_shapes.json',JSON.stringify({version:1,rotation:S.rot,scanUm:[+$('sizeW').value,+$('sizeH').value],spacing:+$('spacing').value,shapes:S.shapes},null,1));
+$('loadJson').addEventListener('change',async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  try{const o=JSON.parse(await f.text());if(!Array.isArray(o.shapes))throw new Error();snapshot();S.shapes=o.shapes.map(s=>({id:S.nextId++,mode:s.mode==='keep'?'keep':'clear',rect:!!s.rect,pts:s.pts.map(p=>[+p[0],+p[1]])}));S.rot=+o.rotation||0;if(o.spacing)$('spacing').value=o.spacing;syncRot();S.sel=null;changed();toast('Shapes loaded. The image rotation was set to '+S.rot+'°.');}
+  catch(err){toast('That file is not a shapes file from this tool.');}
+});
+/* ----- start ----- */
+new ResizeObserver(resize).observe(stage);
+setTool('poly');
+resize();fitView();changed();
+</script>
